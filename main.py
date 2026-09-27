@@ -8,11 +8,13 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
-from database import init_db, init_products
+from database import init_db, init_products, init_gifts
 from handlers import start as start_handler
 from handlers import catalog as catalog_handler
 from handlers import payment as payment_handler
 from handlers import admin_products as admin_products_handler
+from handlers import profile as profile_handler
+from handlers import topup as topup_handler
 
 
 async def health(_):
@@ -30,8 +32,11 @@ async def run_web():
 
 async def main():
     logging.basicConfig(level=logging.INFO)
+
     await init_db()
     await init_products()
+    await init_gifts()
+
     await run_web()
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -41,6 +46,8 @@ async def main():
     dp.include_router(catalog_handler.router)
     dp.include_router(payment_handler.router)
     dp.include_router(admin_products_handler.router)
+    dp.include_router(profile_handler.router)
+    dp.include_router(topup_handler.router)
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
