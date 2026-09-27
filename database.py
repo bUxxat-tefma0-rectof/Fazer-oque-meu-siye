@@ -1,6 +1,7 @@
 import aiosqlite
 from config import DATABASE_PATH
 
+
 async def init_db():
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
@@ -24,6 +25,60 @@ async def init_db():
         """)
         await db.commit()
 
+
+async def init_products():
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                code          TEXT UNIQUE,
+                name          TEXT NOT NULL,
+                price         REAL NOT NULL,
+                old_price     REAL,
+                stock         INTEGER DEFAULT 0,
+                sold          INTEGER DEFAULT 0,
+                description   TEXT,
+                guarantee     TEXT,
+                category      TEXT,
+                active        INTEGER DEFAULT 1,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS purchases (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                purchase_id  TEXT UNIQUE,
+                user_id      INTEGER,
+                product_id   INTEGER,
+                product_name TEXT,
+                price        REAL,
+                quantity     INTEGER DEFAULT 1,
+                email        TEXT,
+                password     TEXT,
+                status       TEXT DEFAULT 'active',
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at   TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                txid        TEXT UNIQUE,
+                user_id     INTEGER,
+                amount      REAL,
+                bonus       REAL DEFAULT 0,
+                type        TEXT,
+                product_id  INTEGER,
+                quantity    INTEGER DEFAULT 1,
+                status      TEXT DEFAULT 'pending',
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at  TIMESTAMP
+            )
+        """)
+        await db.commit()
+
+
+# ---------- USERS ----------
 
 async def get_user(user_id: int):
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -50,6 +105,18 @@ async def get_balance(user_id: int) -> float:
     return float(user["balance"]) if user else 0.0
 
 
+async def add_balance(user_id: int, amount: float):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, user_id))
+        await db.commit()
+
+
+async def sub_balance(user_id: int, amount: float):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, user_id))
+        await db.commit()
+
+
 async def set_gate_message(user_id: int, message_id: int):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("UPDATE users SET gate_message_id=? WHERE user_id=?", (message_id, user_id))
@@ -59,3 +126,106 @@ async def set_gate_message(user_id: int, message_id: int):
 async def get_gate_message(user_id: int):
     user = await get_user(user_id)
     return user["gate_message_id"] if user else None
+
+
+# ---------- PRODUCTS ----------
+
+async def list_products():
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM products WHERE active=1 ORDER BY id ASC")
+        return await cur.fetchall()
+
+
+async def get_product(product_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM products WHERE id=?", (product_id,))
+        return await cur.fetchone()
+
+
+async def search_products(term: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM products WHERE active=1 AND name LIKE ? ORDER BY id ASC",
+            (f"%{term}%",),
+        )
+        return await cur.fetchall()
+
+
+async def add_product(code, name, price, old_price=None, stock=0, description="",
+                      guarantee="", category=""):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO products (code,name,price,old_price,stock,description,guarantee,category)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (code, name, price, old_price, stock, description, guarantee, category),
+        )
+        await db.commit()
+
+
+async def remove_product(product_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM products WHERE id=?", (product_id,))
+        await db.commit()
+
+
+async def set_product_stock(product_id: int, stock: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE products SET stock=? WHERE id=?", (stock, product_id))
+        await db.commit()
+
+
+# ---------- PAYMENTS ----------
+
+async def create_payment(txid, user_id, amount, type_, product_id=None, quantity=1, bonus=0.0):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO payments (txid,user_id,amount,bonus,type,product_id,quantity,status,expires_at)
+               VALUES (?,?,?,?,?,?,?, 'pending', datetime('now','+10 minutes'))""",
+            (txid, user_id, amount, bonus, type_, product_id, quantity),
+        )
+        await db.commit()
+
+
+async def get_payment(txid: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM payments WHERE txid=?", (txid,))
+        return await cur.fetchone()
+
+
+async def mark_payment_paid(txid: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE payments SET status='paid' WHERE txid=?", (txid,))
+        await db.commit()
+
+
+# ---------- PURCHASES ----------
+
+async def create_purchase(pid, user_id, product_id, product_name, price, quantity=1, email=None, password=None):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO purchases (purchase_id,user_id,product_id,product_name,price,quantity,email,password,expires_at)
+               VALUES (?,?,?,?,?,?,?,?, datetime('now','+30 days'))""",
+            (pid, user_id, product_id, product_name, price, quantity, email, password),
+        )
+        await db.execute("UPDATE products SET sold = sold + ?, stock = stock - ? WHERE id=?",
+                         (quantity, quantity, product_id))
+        await db.commit()
+
+
+async def get_last_purchase(user_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM purchases WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,))
+        return await cur.fetchone()
+
+
+async def get_purchase_by_id(purchase_id: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM purchases WHERE purchase_id=?", (purchase_id,))
+        return await cur.fetchone()
