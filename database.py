@@ -2,6 +2,8 @@ import aiosqlite
 from config import DATABASE_PATH
 
 
+# ---------- INIT ----------
+
 async def init_db():
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
@@ -78,6 +80,23 @@ async def init_products():
         await db.commit()
 
 
+async def init_gifts():
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS gift_cards (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                code        TEXT UNIQUE NOT NULL,
+                value       REAL DEFAULT 0,
+                product_id  INTEGER,
+                used        INTEGER DEFAULT 0,
+                used_by     INTEGER,
+                used_at     TIMESTAMP,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.commit()
+
+
 # ---------- USERS ----------
 
 async def get_user(user_id: int):
@@ -126,6 +145,38 @@ async def set_gate_message(user_id: int, message_id: int):
 async def get_gate_message(user_id: int):
     user = await get_user(user_id)
     return user["gate_message_id"] if user else None
+
+
+async def update_whatsapp(user_id: int, whatsapp):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE users SET whatsapp=? WHERE user_id=?", (whatsapp, user_id))
+        await db.commit()
+
+
+async def get_user_stats(user_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(
+            "SELECT COUNT(*) as total, COALESCE(SUM(price),0) as gasto "
+            "FROM purchases WHERE user_id=?", (user_id,))
+        purchases = await cur.fetchone()
+
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(amount),0) as total FROM payments "
+            "WHERE user_id=? AND status='paid' AND type='topup'", (user_id,))
+        pix = await cur.fetchone()
+
+        cur = await db.execute(
+            "SELECT COUNT(*) as total FROM gift_cards WHERE used_by=?", (user_id,))
+        gifts = await cur.fetchone()
+
+    return {
+        "compras": purchases["total"] or 0,
+        "gasto": float(purchases["gasto"] or 0),
+        "pix": float(pix["total"] or 0),
+        "gifts": gifts["total"] or 0,
+    }
 
 
 # ---------- PRODUCTS ----------
@@ -229,3 +280,43 @@ async def get_purchase_by_id(purchase_id: str):
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM purchases WHERE purchase_id=?", (purchase_id,))
         return await cur.fetchone()
+
+
+async def list_purchases(user_id: int, only_active: bool = False):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if only_active:
+            cur = await db.execute(
+                "SELECT * FROM purchases WHERE user_id=? AND expires_at > CURRENT_TIMESTAMP "
+                "ORDER BY id DESC", (user_id,))
+        else:
+            cur = await db.execute(
+                "SELECT * FROM purchases WHERE user_id=? ORDER BY id DESC", (user_id,))
+        return await cur.fetchall()
+
+
+# ---------- GIFT CARDS ----------
+
+async def get_gift(code: str):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM gift_cards WHERE code=?", (code,))
+        return await cur.fetchone()
+
+
+async def use_gift(code: str, user_id: int):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE gift_cards SET used=1, used_by=?, used_at=CURRENT_TIMESTAMP WHERE code=?",
+            (user_id, code),
+        )
+        await db.commit()
+
+
+async def add_gift(code: str, value: float = 0, product_id: int = None):
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO gift_cards (code, value, product_id) VALUES (?,?,?)",
+            (code, value, product_id),
+        )
+        await db.commit()
